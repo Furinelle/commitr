@@ -117,7 +117,30 @@ commitr --provider deepseek            # use a preset, just for this run
 commitr --model deepseek/deepseek-reasoner   # exact model override
 commitr providers                      # subcommand: list providers
 commitr config --init                  # subcommand: write template config
+commitr install-hook                   # install prepare-commit-msg git hook
+commitr uninstall-hook                 # remove the git hook
 ```
+
+## Git-hook mode (`commitr install-hook`)
+
+Want plain `git commit` to "just work" with AI? Install the hook once per repo:
+
+```bash
+cd /your/project
+commitr install-hook
+```
+
+From then on, `git commit` (no `-m`) opens your editor with a pre-filled message:
+
+```bash
+git add some-file
+git commit              # editor opens with AI-generated message already there
+# edit / save / done
+```
+
+- Skips when you pass `-m`, on merge / squash commits, or if `commitr` isn't on `PATH`
+- Silently falls back to an empty editor if the LLM call fails (your commit isn't blocked)
+- Remove it any time: `commitr uninstall-hook`
 
 ## Smart commit splitting (`--split`)
 
@@ -159,8 +182,9 @@ These go into the prompt with explicit instructions to detect and match: **langu
 - [x] Style learning from `git log`
 - [x] Multi-provider presets + config file + `.env` loading
 - [x] Smart commit splitting (file-level, `--split`)
+- [x] `prepare-commit-msg` git-hook mode (`commitr install-hook`)
+- [x] Optional `Co-Authored-By` trailer (per-repo opt-in)
 - [ ] Hunk-level commit splitting (within a file)
-- [ ] `prepare-commit-msg` git-hook mode
 - [ ] Diff caching (don't re-call the LLM for identical diffs)
 - [ ] Binary diff detection & skip
 - [ ] Homebrew tap & PyPI release
@@ -169,9 +193,10 @@ These go into the prompt with explicit instructions to detect and match: **langu
 
 ```
 src/commitr/
-├── __init__.py   # Typer CLI: callback + `providers` / `config` subcommands
+├── __init__.py   # Typer CLI: callback + subcommands
 ├── config.py     # provider presets, config & .env loading, model resolution
 ├── git.py        # subprocess wrappers around git
+├── hook.py       # prepare-commit-msg install / uninstall / fill
 ├── llm.py        # LiteLLM call + style-aware prompt
 └── splitter.py   # LLM-driven multi-commit grouping (`--split`)
 ```

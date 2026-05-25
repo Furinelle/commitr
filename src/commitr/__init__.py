@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 import os
+
+# Quiet litellm's noisy import-time warnings about optional AWS providers.
+# Must be set BEFORE importing anything that imports litellm.
+logging.getLogger("LiteLLM").setLevel(logging.ERROR)
 
 import questionary
 import typer
@@ -10,7 +15,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from commitr import config, git, llm, splitter
+from commitr import config, git, hook, llm, splitter
 
 
 def _version_callback(value: bool) -> None:
@@ -81,6 +86,66 @@ def providers_cmd() -> None:
         "\n[dim]Use [bold]commitr --provider <name>[/bold] for a one-off, "
         "or [bold]commitr config --init[/bold] to set a default.[/dim]"
     )
+
+
+@app.command("install-hook")
+def install_hook_cmd(
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing hook."),
+) -> None:
+    """Install a prepare-commit-msg hook so `git commit` auto-fills the message."""
+    if not git.in_repo():
+        console.print("[red]Not inside a git repository.[/red]")
+        raise typer.Exit(code=1)
+    try:
+        path, overwrote = hook.install(force=force)
+    except FileExistsError as exc:
+        console.print(
+            f"[yellow]Hook already exists at {exc}. "
+            "Pass [bold]--force[/bold] to overwrite.[/yellow]"
+        )
+        raise typer.Exit(code=1) from exc
+    verb = "Overwrote" if overwrote else "Installed"
+    console.print(f"[green]✓[/green] {verb}: {path}")
+    console.print(
+        "Run [bold]git commit[/bold] (no -m) — commitr will fill the editor for you."
+    )
+
+
+@app.command("uninstall-hook")
+def uninstall_hook_cmd() -> None:
+    """Remove the prepare-commit-msg hook from the current repo."""
+    if not git.in_repo():
+        console.print("[red]Not inside a git repository.[/red]")
+        raise typer.Exit(code=1)
+    try:
+        removed = hook.uninstall()
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    if removed is None:
+        console.print("[dim]No hook installed.[/dim]")
+    else:
+        console.print(f"[green]✓[/green] Removed: {removed}")
+
+
+@app.command("hook-fill", hidden=True)
+def hook_fill_cmd(msg_file: str = typer.Argument(..., help="Path to COMMIT_EDITMSG")) -> None:
+    """Internal: called by the prepare-commit-msg hook. Silent on failure."""
+    config.load_env_file()
+    if not git.in_repo() or not git.has_staged_changes():
+        return
+    try:
+        resolved = config.resolve_model(cli_model=None, cli_provider=None)
+        diff = git.staged_diff()
+        subjects = git.recent_commits(limit=20)
+        samples = git.recent_commit_samples(limit=5)
+        message = llm.generate_commit_message(
+            diff=diff, subjects=subjects, samples=samples, model=resolved,
+        )
+    except Exception:
+        return  # silent: user gets a clean editor on any failure
+    message = _append_coauthor(message)
+    hook.fill_message_file(msg_file, message)
 
 
 @app.command("config")
