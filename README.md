@@ -108,11 +108,37 @@ commitr config        # show the resolved model + config file locations
 commitr                                # interactive (default)
 commitr --yes                          # commit without asking (CI-friendly)
 commitr --dry-run                      # print the message; don't commit
+commitr --split                        # analyze diff; propose multi-commit split
 commitr --provider deepseek            # use a preset, just for this run
 commitr --model deepseek/deepseek-reasoner   # exact model override
 commitr providers                      # subcommand: list providers
 commitr config --init                  # subcommand: write template config
 ```
+
+## Smart commit splitting (`--split`)
+
+When you staged a feature **and** an unrelated bugfix **and** some docs in one
+go, `commitr --split` asks the model to group your staged files into independent
+commits. You then walk through each group:
+
+```
+╭─ Group 1/3 · 2 file(s) · Adds the new heredoc edge case to the parser. ─╮
+│ feat(parser): handle empty heredoc                                       │
+│                                                                          │
+│ Files:                                                                   │
+│   src/parser.py                                                          │
+│   src/utils.py                                                           │
+╰──────────────────────────────────────────────────────────────────────────╯
+? What now?
+❯ Commit this group
+  Edit message, then commit
+  Skip this group
+  Stop (abort remaining)
+```
+
+- File-level splitting only (no hunk-splitting — yet).
+- The model is instructed to only split clearly independent changes.
+- Stopping or skipping leaves untouched files re-staged so you can finish manually.
 
 ## How style learning works
 
@@ -128,7 +154,8 @@ These go into the prompt with explicit instructions to detect and match: **langu
 - [x] MVP: read staged diff → LLM → interactive accept/edit/regen → commit
 - [x] Style learning from `git log`
 - [x] Multi-provider presets + config file + `.env` loading
-- [ ] Smart commit splitting (suggest breaking large diffs into multiple commits)
+- [x] Smart commit splitting (file-level, `--split`)
+- [ ] Hunk-level commit splitting (within a file)
 - [ ] `prepare-commit-msg` git-hook mode
 - [ ] Diff caching (don't re-call the LLM for identical diffs)
 - [ ] Binary diff detection & skip
@@ -141,7 +168,8 @@ src/commitr/
 ├── __init__.py   # Typer CLI: callback + `providers` / `config` subcommands
 ├── config.py     # provider presets, config & .env loading, model resolution
 ├── git.py        # subprocess wrappers around git
-└── llm.py        # LiteLLM call + style-aware prompt
+├── llm.py        # LiteLLM call + style-aware prompt
+└── splitter.py   # LLM-driven multi-commit grouping (`--split`)
 ```
 
 ## License

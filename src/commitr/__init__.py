@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from commitr import config, git, llm
+from commitr import config, git, llm, splitter
 
 app = typer.Typer(
     add_completion=False,
@@ -32,12 +32,16 @@ def _entry(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation, commit directly."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print the message but do not commit."),
+    split: bool = typer.Option(
+        False, "--split", "-s",
+        help="Analyze the diff and propose splitting into multiple independent commits.",
+    ),
 ) -> None:
     """Default action (no subcommand): generate a commit message."""
     config.load_env_file()
     if ctx.invoked_subcommand is not None:
         return
-    _run_commit(model=model, provider=provider, yes=yes, dry_run=dry_run)
+    _run_commit(model=model, provider=provider, yes=yes, dry_run=dry_run, split=split)
 
 
 @app.command("providers")
@@ -90,6 +94,7 @@ def _run_commit(
     provider: str | None,
     yes: bool,
     dry_run: bool,
+    split: bool = False,
 ) -> None:
     if not git.in_repo():
         console.print("[red]Not inside a git repository.[/red]")
@@ -108,6 +113,10 @@ def _run_commit(
     diff = git.staged_diff()
     subjects = git.recent_commits(limit=20)
     samples = git.recent_commit_samples(limit=5)
+
+    if split:
+        _split_flow(diff, subjects, samples, resolved, dry_run=dry_run)
+        return
 
     with console.status(f"[cyan]Asking {resolved}…[/cyan]"):
         try:
@@ -163,6 +172,110 @@ def _run_commit(
     except RuntimeError as exc:
         console.print(f"[red]Commit failed:[/red] {exc}")
         raise typer.Exit(code=3) from exc
+
+
+def _split_flow(
+    diff: str,
+    subjects: list[str],
+    samples: list[str],
+    resolved: str,
+    dry_run: bool,
+) -> None:
+    """Multi-commit split: ask LLM to group files, then commit each group."""
+    files = git.staged_files()
+    if len(files) <= 1:
+        console.print(
+            "[yellow]Only one staged file; nothing to split. "
+            "Run without --split for a normal commit.[/yellow]"
+        )
+        raise typer.Exit(code=1)
+
+    with console.status(f"[cyan]Analyzing {len(files)} files for split groups…[/cyan]"):
+        try:
+            groups = splitter.analyze_splits(
+                diff=diff, files=files, subjects=subjects, samples=samples, model=resolved,
+            )
+        except Exception as exc:
+            console.print(f"[red]Split analysis failed:[/red] {exc}")
+            raise typer.Exit(code=2) from exc
+
+    if len(groups) == 1:
+        console.print("[dim]LLM judged this as a single coherent change — no split needed.[/dim]")
+
+    console.print(
+        f"\n[bold cyan]Proposed {len(groups)} commit group(s).[/bold cyan]\n"
+    )
+    if dry_run:
+        for i, g in enumerate(groups, 1):
+            _print_group_panel(g, i, len(groups))
+        console.print("[dim](dry-run — no commits made)[/dim]")
+        return
+
+    skipped: list[splitter.CommitGroup] = []
+    committed = 0
+    for i, group in enumerate(groups, 1):
+        _print_group_panel(group, i, len(groups))
+
+        choice = questionary.select(
+            "What now?",
+            choices=[
+                questionary.Choice("Commit this group", value="commit"),
+                questionary.Choice("Edit message, then commit", value="edit"),
+                questionary.Choice("Skip this group", value="skip"),
+                questionary.Choice("Stop (abort remaining)", value="stop"),
+            ],
+        ).ask()
+
+        if choice in (None, "stop"):
+            remaining = [f for g in (skipped + list(groups[i - 1 :])) for f in g.files]
+            if remaining:
+                git.stage_only(remaining)
+                console.print(
+                    f"[dim]Re-staged {len(remaining)} files from skipped / remaining groups.[/dim]"
+                )
+            console.print("[dim]Stopped.[/dim]")
+            return
+
+        if choice == "skip":
+            skipped.append(group)
+            continue
+
+        msg = group.message
+        if choice == "edit" or not msg.strip():
+            msg = _edit_in_editor(msg or "")
+            if not msg.strip():
+                console.print("[dim]Empty message; skipping this group.[/dim]")
+                skipped.append(group)
+                continue
+
+        try:
+            git.stage_only(group.files)
+            git.commit(msg)
+            committed += 1
+            console.print(f"[green]✓ Committed group {i}.[/green]")
+        except (ValueError, RuntimeError) as exc:
+            console.print(f"[red]Commit failed:[/red] {exc}")
+            return
+
+    if skipped:
+        skipped_files = [f for g in skipped for f in g.files]
+        git.stage_only(skipped_files)
+        console.print(
+            f"[yellow]{len(skipped)} group(s) skipped.[/yellow] "
+            f"Re-staged {len(skipped_files)} file(s) for follow-up."
+        )
+    console.print(f"\n[bold green]Done.[/bold green] {committed} commit(s) created.")
+
+
+def _print_group_panel(group: splitter.CommitGroup, i: int, total: int) -> None:
+    msg = group.message or "[dim italic](no message — you'll need to edit)[/dim italic]"
+    title = f"Group {i}/{total} · {len(group.files)} file(s)"
+    if group.rationale:
+        title += f" · {group.rationale}"
+    files_block = "\n".join(f"  {f}" for f in group.files)
+    console.print(
+        Panel(f"{msg}\n\n[dim]Files:[/dim]\n{files_block}", title=title, border_style="cyan")
+    )
 
 
 def _edit_in_editor(initial: str) -> str:

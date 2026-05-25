@@ -58,3 +58,22 @@ def recent_commit_samples(limit: int = 5) -> list[str]:
 
 def commit(message: str) -> str:
     return _run(["commit", "-m", message])
+
+
+def staged_files() -> list[str]:
+    """Files in the index (relative to repo root)."""
+    out = _run(["diff", "--staged", "--name-only"])
+    return [f for f in out.splitlines() if f.strip()]
+
+
+def unstage_all() -> None:
+    """Unstage every change (safe — does not touch the working tree)."""
+    subprocess.run(["git", "reset", "--quiet"], check=False)
+
+
+def stage_only(files: list[str]) -> None:
+    """Reset the index, then stage exactly these files."""
+    if not files:
+        raise ValueError("stage_only requires at least one file")
+    unstage_all()
+    _run(["add", "--", *files])
