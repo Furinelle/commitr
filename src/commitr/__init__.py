@@ -145,6 +145,7 @@ def _run_commit(
             console.print(f"[red]LLM call failed:[/red] {exc}")
             raise typer.Exit(code=2) from exc
 
+    message = _append_coauthor(message)
     console.print(Panel(message, title=f"Proposed commit (via {resolved})", border_style="cyan"))
 
     if dry_run:
@@ -172,6 +173,7 @@ def _run_commit(
             message = llm.generate_commit_message(
                 diff=diff, subjects=subjects, samples=samples, model=resolved,
             )
+        message = _append_coauthor(message)
         console.print(Panel(message, title="Proposed commit (v2)", border_style="cyan"))
         if not questionary.confirm("Commit this?").ask():
             console.print("[dim]Aborted.[/dim]")
@@ -217,6 +219,10 @@ def _split_flow(
         except Exception as exc:
             console.print(f"[red]Split analysis failed:[/red] {exc}")
             raise typer.Exit(code=2) from exc
+
+    # Apply Co-Authored-By trailer (if configured) to every group's proposed message.
+    for g in groups:
+        g.message = _append_coauthor(g.message)
 
     if len(groups) == 1:
         console.print("[dim]LLM judged this as a single coherent change — no split needed.[/dim]")
@@ -293,6 +299,18 @@ def _split_flow(
             f"Re-staged {len(skipped_files)} file(s) for follow-up."
         )
     console.print(f"\n[bold green]Done.[/bold green] {committed} commit(s) created.")
+
+
+def _append_coauthor(message: str) -> str:
+    """Append a Co-Authored-By trailer if one is configured. No-op otherwise."""
+    if not message:
+        return message
+    trailer = config.coauthor_trailer()
+    if not trailer:
+        return message
+    if "Co-Authored-By:" in message:
+        return message
+    return f"{message.rstrip()}\n\nCo-Authored-By: {trailer}"
 
 
 def _print_group_panel(group: splitter.CommitGroup, i: int, total: int) -> None:

@@ -101,7 +101,11 @@ def write_config_template() -> Path:
 provider = "deepseek"
 
 # ...or specify an exact LiteLLM model string (overrides `provider`):
-# model = "deepseek/deepseek-chat"
+# model = "deepseek/deepseek-v4-flash"
+
+# Append a Co-Authored-By: trailer to every generated commit message.
+# Useful to credit the AI partner (or yourself as orchestrator) on each commit.
+# coauthor = "Claude <noreply@anthropic.com>"
 """
     CONFIG_FILE.write_text(template)
     return CONFIG_FILE
@@ -156,6 +160,22 @@ def resolve_model(cli_model: str | None, cli_provider: str | None) -> str:
         "No model could be resolved. Set an API key (e.g. DEEPSEEK_API_KEY), "
         "pick a provider with --provider, or run `commitr config --init`."
     )
+
+
+def coauthor_trailer() -> str | None:
+    """Return the configured Co-Authored-By trailer value, or None.
+
+    Resolution: $COMMITR_COAUTHOR env var > [default].coauthor in config.toml.
+    Returns the bare 'Name <email>' string; the caller wraps it in
+    'Co-Authored-By: ...'.
+    """
+    env = os.environ.get("COMMITR_COAUTHOR")
+    if env and env.strip():
+        return env.strip()
+    val = load_config().get("default", {}).get("coauthor")
+    if val and isinstance(val, str) and val.strip():
+        return val.strip()
+    return None
 
 
 def provider_status() -> list[tuple[Provider, bool]]:
