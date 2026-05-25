@@ -1,6 +1,7 @@
 """commitr: AI-generated git commit messages that match your project's style."""
 from __future__ import annotations
 
+import importlib.metadata
 import os
 
 import questionary
@@ -10,6 +11,18 @@ from rich.panel import Panel
 from rich.table import Table
 
 from commitr import config, git, llm, splitter
+
+
+def _version_callback(value: bool) -> None:
+    if not value:
+        return
+    try:
+        version = importlib.metadata.version("commitr")
+    except importlib.metadata.PackageNotFoundError:
+        version = "unknown"
+    typer.echo(f"commitr {version}")
+    raise typer.Exit()
+
 
 app = typer.Typer(
     add_completion=False,
@@ -35,6 +48,11 @@ def _entry(
     split: bool = typer.Option(
         False, "--split", "-s",
         help="Analyze the diff and propose splitting into multiple independent commits.",
+    ),
+    version: bool = typer.Option(
+        False, "--version", "-V",
+        callback=_version_callback, is_eager=True,
+        help="Show version and exit.",
     ),
 ) -> None:
     """Default action (no subcommand): generate a commit message."""
