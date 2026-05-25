@@ -86,7 +86,9 @@ Example `config.toml`:
 
 ```toml
 [default]
-provider = "deepseek"
+# Leave this commented to auto-detect from configured API keys,
+# or uncomment to pin a default provider.
+# provider = "deepseek"
 # model = "deepseek/deepseek-reasoner"   # or override with an exact model string
 ```
 
@@ -117,6 +119,8 @@ commitr --provider deepseek            # use a preset, just for this run
 commitr --model deepseek/deepseek-reasoner   # exact model override
 commitr providers                      # subcommand: list providers
 commitr config --init                  # subcommand: write template config
+commitr style                          # inspect learned commit style
+commitr doctor                         # check staged changes before generation
 commitr install-hook                   # install prepare-commit-msg git hook
 commitr uninstall-hook                 # remove the git hook
 ```
@@ -176,6 +180,41 @@ For every run, `commitr` collects:
 
 These go into the prompt with explicit instructions to detect and match: **language, scope usage, emoji usage, body usage, and type vocabulary**. So if your repo writes Chinese commits with `(scope)` and gitmoji, you'll get Chinese commits with `(scope)` and gitmoji.
 
+You can inspect the inferred profile without calling an LLM:
+
+```bash
+commitr style
+```
+
+Example output:
+
+```
+╭──────────── Commit style profile ────────────╮
+│ Language: English                            │
+│ Conventional commits: yes                    │
+│ Emoji prefix: no                             │
+│ Body usage: occasional                       │
+│ Types: feat, fix, docs                       │
+│ Scopes: cli, config                          │
+╰──────────────────────────────────────────────╯
+```
+
+## Commit doctor
+
+Before asking the model, you can run a local preflight check:
+
+```bash
+commitr doctor
+```
+
+`doctor` catches deterministic issues such as:
+
+- no staged changes
+- missing model/provider configuration
+- binary diffs where content is invisible to the model
+- very large diffs that may lose details
+- lockfile-only commits that may be missing the dependency change
+
 ## Roadmap
 
 - [x] MVP: read staged diff → LLM → interactive accept/edit/regen → commit
@@ -184,7 +223,10 @@ These go into the prompt with explicit instructions to detect and match: **langu
 - [x] Smart commit splitting (file-level, `--split`)
 - [x] `prepare-commit-msg` git-hook mode (`commitr install-hook`)
 - [x] Optional `Co-Authored-By` trailer (per-repo opt-in)
+- [x] Local `style` and `doctor` inspection commands
 - [ ] Hunk-level commit splitting (within a file)
+- [ ] Semantic diff noise filtering
+- [ ] Team policy file (`.commitr.toml`)
 - [ ] Diff caching (don't re-call the LLM for identical diffs)
 - [ ] Binary diff detection & skip
 - [ ] Homebrew tap & PyPI release
@@ -195,10 +237,12 @@ These go into the prompt with explicit instructions to detect and match: **langu
 src/commitr/
 ├── __init__.py   # Typer CLI: callback + subcommands
 ├── config.py     # provider presets, config & .env loading, model resolution
+├── doctor.py     # local staged-diff health checks
 ├── git.py        # subprocess wrappers around git
 ├── hook.py       # prepare-commit-msg install / uninstall / fill
 ├── llm.py        # LiteLLM call + style-aware prompt
-└── splitter.py   # LLM-driven multi-commit grouping (`--split`)
+├── splitter.py   # LLM-driven multi-commit grouping (`--split`)
+└── style.py      # commit history style inference
 ```
 
 ## License

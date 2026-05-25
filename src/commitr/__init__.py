@@ -4,6 +4,8 @@ from __future__ import annotations
 import importlib.metadata
 import logging
 import os
+import shlex
+import subprocess
 
 # Quiet litellm's noisy import-time warnings about optional AWS providers.
 # Must be set BEFORE importing anything that imports litellm.
@@ -15,7 +17,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from commitr import config, git, hook, llm, splitter
+from commitr import config, doctor, git, hook, llm, splitter, style
 
 
 def _version_callback(value: bool) -> None:
@@ -170,6 +172,72 @@ def config_cmd(
     env_exists = "exists" if config.ENV_FILE.exists() else "not found"
     console.print(f"[dim]Config file: {config.CONFIG_FILE} ({cfg_exists})[/dim]")
     console.print(f"[dim]Env file:    {config.ENV_FILE} ({env_exists})[/dim]")
+
+
+@app.command("style")
+def style_cmd() -> None:
+    """Infer and print the commit-message style from recent history."""
+    if not git.in_repo():
+        console.print("[red]Not inside a git repository.[/red]")
+        raise typer.Exit(code=1)
+    profile = style.infer_profile(
+        subjects=git.recent_commits(limit=50),
+        samples=git.recent_commit_samples(limit=10),
+    )
+    console.print(
+        Panel(
+            style.render_profile(profile),
+            title="Commit style profile",
+            border_style="cyan",
+        )
+    )
+
+
+@app.command("doctor")
+def doctor_cmd() -> None:
+    """Check staged changes and local config before generating a commit."""
+    config.load_env_file()
+    if not git.in_repo():
+        console.print("[red]Not inside a git repository.[/red]")
+        raise typer.Exit(code=1)
+
+    model_error: str | None = None
+    try:
+        config.resolve_model(cli_model=None, cli_provider=None)
+    except Exception as exc:
+        model_error = str(exc)
+
+    files = git.staged_files()
+    diff = git.staged_diff() if files else ""
+    findings = doctor.analyze_staged_changes(
+        diff=diff,
+        files=files,
+        model_error=model_error,
+    )
+    status = doctor.overall_status(findings)
+
+    if not findings:
+        console.print("[green]✓[/green] No local commit issues detected.")
+        return
+
+    table = Table(title=f"commitr doctor: {status}", header_style="bold cyan")
+    table.add_column("level")
+    table.add_column("code")
+    table.add_column("message")
+    for finding in findings:
+        style_name = {
+            "error": "red",
+            "warning": "yellow",
+            "info": "cyan",
+        }.get(finding.level, "white")
+        table.add_row(
+            f"[{style_name}]{finding.level}[/{style_name}]",
+            finding.code,
+            finding.message,
+        )
+    console.print(table)
+    if status == "error":
+        raise typer.Exit(code=1)
 
 
 def _run_commit(
@@ -398,7 +466,9 @@ def _edit_in_editor(initial: str) -> str:
         fh.write(initial)
         path = fh.name
     try:
-        os.system(f'{editor} "{path}"')  # noqa: S605
+        result = subprocess.run([*shlex.split(editor), path], check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"Editor exited with status {result.returncode}.")
         with open(path) as fh:
             return fh.read().strip()
     finally:

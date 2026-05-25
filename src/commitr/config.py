@@ -97,8 +97,9 @@ def write_config_template() -> Path:
 #   CLI flag (--model / --provider) > $COMMITR_MODEL > this file > auto-detect
 
 [default]
-# Pick one preset:
-provider = "deepseek"
+# Pick one preset to pin a default provider. Leave commented to auto-detect
+# the first provider whose API key is configured.
+# provider = "deepseek"
 
 # ...or specify an exact LiteLLM model string (overrides `provider`):
 # model = "deepseek/deepseek-v4-flash"
