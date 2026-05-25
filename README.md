@@ -24,16 +24,29 @@ Want a different model from the same provider? Use `--model <litellm-string>` di
 
 ## Install
 
-Requires Python ≥ 3.12 and [uv](https://github.com/astral-sh/uv).
+Requires Python ≥ 3.12.
 
 ```bash
-git clone https://github.com/Furinelle/commitr ~/Documents/Github/commitr
-cd ~/Documents/Github/commitr
-uv sync
-
-# (optional) put it on your PATH
-ln -s "$PWD/.venv/bin/commitr" /usr/local/bin/commitr
+pip install commitr
 ```
+
+Or with [uv](https://github.com/astral-sh/uv) (recommended — pulls a clean isolated environment):
+
+```bash
+uv tool install commitr
+```
+
+<details>
+<summary>Install from source (for development)</summary>
+
+```bash
+git clone https://github.com/Furinelle/commitr
+cd commitr
+uv sync
+ln -s "$PWD/.venv/bin/commitr" /usr/local/bin/commitr  # optional: add to PATH
+```
+
+</details>
 
 ## Quick start
 
