@@ -262,8 +262,18 @@ def _run_commit(
         raise typer.Exit(code=2) from exc
 
     diff = git.staged_diff()
+    files = git.staged_files()
     subjects = git.recent_commits(limit=20)
     samples = git.recent_commit_samples(limit=5)
+
+    # Doctor preflight: surface deterministic issues before burning an API call.
+    findings = doctor.analyze_staged_changes(diff=diff, files=files)
+    if findings:
+        for f in findings:
+            color = {"error": "red", "warning": "yellow"}.get(f.level, "cyan")
+            console.print(f"[{color}]{f.level}[/{color}] {f.code}: {f.message}")
+        if doctor.overall_status(findings) == "error":
+            raise typer.Exit(code=1)
 
     if split:
         _split_flow(diff, subjects, samples, resolved, dry_run=dry_run, yes=yes)
