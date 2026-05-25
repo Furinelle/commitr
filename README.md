@@ -10,13 +10,15 @@ Out-of-the-box presets — see them anytime with `commitr providers`:
 
 | Preset | Default model | Key env | Notes |
 |---|---|---|---|
-| `deepseek` | `deepseek/deepseek-chat` | `DEEPSEEK_API_KEY` | cheap, fast, strong on Chinese |
-| `openai` | `gpt-4o-mini` | `OPENAI_API_KEY` | reliable default |
-| `anthropic` | `claude-haiku-4-5` | `ANTHROPIC_API_KEY` | excellent style matching |
-| `gemini` | `gemini/gemini-2.0-flash-exp` | `GEMINI_API_KEY` | free tier available |
-| `mistral` | `mistral/mistral-small-latest` | `MISTRAL_API_KEY` | EU-hosted |
-| `groq` | `groq/llama-3.3-70b-versatile` | `GROQ_API_KEY` | blazing fast inference |
+| `deepseek` | `deepseek/deepseek-v4-flash` | `DEEPSEEK_API_KEY` | V4 Flash · 1M ctx · ~$0.14/$0.28 per Mtok · strong on Chinese |
+| `openai` | `gpt-5.4-mini` | `OPENAI_API_KEY` | GPT-5.4 mini · reliable, good quality/cost balance |
+| `anthropic` | `claude-haiku-4-5` | `ANTHROPIC_API_KEY` | Haiku 4.5 · excellent style matching, cheap |
+| `gemini` | `gemini/gemini-3.5-flash` | `GEMINI_API_KEY` | Gemini 3.5 Flash · free tier available |
+| `mistral` | `mistral/mistral-small-latest` | `MISTRAL_API_KEY` | Mistral Small 4 · EU-hosted · $0.15/$0.60 per Mtok |
+| `groq` | `groq/qwen/qwen3-32b` | `GROQ_API_KEY` | Qwen3 32B · blazing fast inference |
 | `ollama` | `ollama/qwen2.5-coder:7b` | — | local, zero-cost, zero-leakage |
+
+> Defaults verified **May 2026**. Use `--model <litellm-string>` for any other model (DeepSeek V4 Pro, Claude Sonnet 4.6, GPT-5.5, Gemini 3.5 Pro, …).
 
 Want a different model from the same provider? Use `--model <litellm-string>` directly.
 

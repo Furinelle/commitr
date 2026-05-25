@@ -16,35 +16,46 @@ class Provider:
     notes: str = ""
 
 
-# Canonical preset per provider. Power users can still override with --model.
+# Canonical preset per provider (verified May 2026). Power users can still
+# override with --model. Models are picked for the commit-message use case:
+# cheap, fast, low-temperature-friendly. Updated:
+#   2026-05: DeepSeek V4 Flash, GPT-5.4 mini, Claude Haiku 4.5, Gemini 3.5
+#            Flash, Mistral Small 4 (via -latest), Qwen3 32B on Groq.
 PROVIDERS: dict[str, Provider] = {
     "deepseek": Provider(
-        "deepseek", "deepseek/deepseek-chat", "DEEPSEEK_API_KEY",
-        "https://platform.deepseek.com", "cheap, fast, strong on Chinese",
+        "deepseek", "deepseek/deepseek-v4-flash", "DEEPSEEK_API_KEY",
+        "https://platform.deepseek.com",
+        "V4 Flash · 1M ctx · ~$0.14/$0.28 per Mtok · strong on Chinese",
     ),
     "openai": Provider(
-        "openai", "gpt-4o-mini", "OPENAI_API_KEY",
-        "https://platform.openai.com", "reliable default",
+        "openai", "gpt-5.4-mini", "OPENAI_API_KEY",
+        "https://platform.openai.com",
+        "GPT-5.4 mini · reliable, good quality/cost balance",
     ),
     "anthropic": Provider(
         "anthropic", "claude-haiku-4-5", "ANTHROPIC_API_KEY",
-        "https://console.anthropic.com", "excellent style matching",
+        "https://console.anthropic.com",
+        "Haiku 4.5 · excellent style matching, cheap",
     ),
     "gemini": Provider(
-        "gemini", "gemini/gemini-2.0-flash-exp", "GEMINI_API_KEY",
-        "https://aistudio.google.com", "free tier available",
+        "gemini", "gemini/gemini-3.5-flash", "GEMINI_API_KEY",
+        "https://aistudio.google.com",
+        "Gemini 3.5 Flash · free tier available",
     ),
     "mistral": Provider(
         "mistral", "mistral/mistral-small-latest", "MISTRAL_API_KEY",
-        "https://console.mistral.ai", "EU-hosted",
+        "https://console.mistral.ai",
+        "Mistral Small 4 · EU-hosted · $0.15/$0.60 per Mtok",
     ),
     "groq": Provider(
-        "groq", "groq/llama-3.3-70b-versatile", "GROQ_API_KEY",
-        "https://console.groq.com", "blazing fast inference",
+        "groq", "groq/qwen/qwen3-32b", "GROQ_API_KEY",
+        "https://console.groq.com",
+        "Qwen3 32B · blazing fast inference",
     ),
     "ollama": Provider(
         "ollama", "ollama/qwen2.5-coder:7b", None,
-        "https://ollama.com", "local, zero-cost, zero-leakage",
+        "https://ollama.com",
+        "local, zero-cost, zero-leakage · bump to qwen3-coder when available",
     ),
 }
 
