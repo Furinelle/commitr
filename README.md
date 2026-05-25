@@ -111,6 +111,8 @@ commitr                                # interactive (default)
 commitr --yes                          # commit without asking (CI-friendly)
 commitr --dry-run                      # print the message; don't commit
 commitr --split                        # analyze diff; propose multi-commit split
+commitr --split --yes                  # non-interactive split (commits every group)
+commitr --version                      # print version and exit
 commitr --provider deepseek            # use a preset, just for this run
 commitr --model deepseek/deepseek-reasoner   # exact model override
 commitr providers                      # subcommand: list providers

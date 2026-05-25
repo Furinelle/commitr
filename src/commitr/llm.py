@@ -76,7 +76,7 @@ def generate_commit_message(
             {"role": "user", "content": user},
         ],
         temperature=0.2,
-        max_tokens=300,
+        max_tokens=1000,
     )
     content = response.choices[0].message.content or ""
     return _clean(content)

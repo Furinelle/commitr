@@ -133,7 +133,7 @@ def _run_commit(
     samples = git.recent_commit_samples(limit=5)
 
     if split:
-        _split_flow(diff, subjects, samples, resolved, dry_run=dry_run)
+        _split_flow(diff, subjects, samples, resolved, dry_run=dry_run, yes=yes)
         return
 
     with console.status(f"[cyan]Asking {resolved}…[/cyan]"):
@@ -198,6 +198,7 @@ def _split_flow(
     samples: list[str],
     resolved: str,
     dry_run: bool,
+    yes: bool = False,
 ) -> None:
     """Multi-commit split: ask LLM to group files, then commit each group."""
     files = git.staged_files()
@@ -234,15 +235,24 @@ def _split_flow(
     for i, group in enumerate(groups, 1):
         _print_group_panel(group, i, len(groups))
 
-        choice = questionary.select(
-            "What now?",
-            choices=[
-                questionary.Choice("Commit this group", value="commit"),
-                questionary.Choice("Edit message, then commit", value="edit"),
-                questionary.Choice("Skip this group", value="skip"),
-                questionary.Choice("Stop (abort remaining)", value="stop"),
-            ],
-        ).ask()
+        if yes:
+            if not group.message.strip():
+                console.print(
+                    "[yellow]Group has no message; skipping (--yes can't edit).[/yellow]"
+                )
+                skipped.append(group)
+                continue
+            choice = "commit"
+        else:
+            choice = questionary.select(
+                "What now?",
+                choices=[
+                    questionary.Choice("Commit this group", value="commit"),
+                    questionary.Choice("Edit message, then commit", value="edit"),
+                    questionary.Choice("Skip this group", value="skip"),
+                    questionary.Choice("Stop (abort remaining)", value="stop"),
+                ],
+            ).ask()
 
         if choice in (None, "stop"):
             remaining = [f for g in (skipped + list(groups[i - 1 :])) for f in g.files]
