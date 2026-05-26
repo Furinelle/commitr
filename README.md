@@ -1,8 +1,17 @@
 # commitr
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 AI-generated git commit messages that **learn your project's style** — language, format, scope, emoji, body conventions. Built-in support for **7 AI providers** and 100+ models via [LiteLLM](https://github.com/BerriAI/litellm).
 
 > Stage your changes, run `commitr`, accept / edit / regenerate, commit. That's it.
+
+**Why commitr stands out** — features no other AI commit tool has:
+
+- **Hunk-level splitting** (`--split --hunks`) — split *within* a single file, not just by file
+- **Diff cache** — instant on repeat diffs, zero API cost on regenerate
+- **Issue context** (`--issue N`) — model sees the issue title/body so it knows *why*, not just *what*
+- **PR mode** (`commitr pr`) — same style-learning pipeline applied to pull-request descriptions
 
 ## Supported providers
 
@@ -63,7 +72,7 @@ commitr                                # uses the first provider whose key is se
 You'll get an interactive prompt:
 
 ```
-╭───── Proposed commit (via deepseek/deepseek-chat) ─────╮
+╭── Proposed commit (via deepseek/deepseek-v4-flash) ────╮
 │ feat(parser): handle empty heredoc                     │
 │                                                        │
 │ Returned an empty string instead of raising; fixes #42.│
@@ -187,7 +196,7 @@ commits. You then walk through each group:
   Stop (abort remaining)
 ```
 
-- File-level splitting only (no hunk-splitting — yet).
+- Default is file-level; pass `--hunks` to split *within* a single file too (see below).
 - The model is instructed to only split clearly independent changes.
 - Stopping or skipping leaves untouched files re-staged so you can finish manually.
 
