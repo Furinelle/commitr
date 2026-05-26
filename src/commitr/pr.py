@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import litellm
 
 from commitr import cache
+from commitr import prompt_safety
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,9 @@ Rules:
   isn't useful for this PR. Keep it tight; engineers skim PRs.
 - Use the same NATURAL LANGUAGE as the sample titles (English / Chinese / etc).
 - If the diff is trivial (typo fix, lockfile bump), the body can be one line.
-- DO NOT echo the diff. DO NOT invent issues that aren't in the commits."""
+- DO NOT echo the diff. DO NOT invent issues that aren't in the commits.
+
+""" + prompt_safety.UNTRUSTED_DATA_INSTRUCTION
 
 
 USER_TEMPLATE = """Sample recent PR titles from this repo (style guide):
@@ -52,10 +55,11 @@ USER_TEMPLATE = """Sample recent PR titles from this repo (style guide):
 Commits on this branch (oldest → newest):
 {commits}
 
-Diff against {base_ref}:
-```diff
+Base ref:
+{base_ref}
+
+Diff against base:
 {diff}
-```
 
 Produce the JSON now."""
 
@@ -84,7 +88,7 @@ def commits_since(base_ref: str, limit: int = 50) -> list[str]:
     """Commit subjects on HEAD not in base."""
     try:
         result = subprocess.run(
-            ["git", "log", f"{base_ref}..HEAD", f"-{limit}", "--pretty=format:%s"],
+            ["git", "log", f"{base_ref}..HEAD", f"-{limit}", "--reverse", "--pretty=format:%s"],
             capture_output=True, text=True, check=False, timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -150,10 +154,16 @@ def generate(
 ) -> PullRequest:
     """Single LLM call → (title, body). Cached like commit messages."""
     user = USER_TEMPLATE.format(
-        pr_samples="\n".join(f"- {s}" for s in pr_samples) or "(no prior PRs)",
-        commits="\n".join(f"- {c}" for c in commits) or "(no commits)",
-        base_ref=base_ref,
-        diff=_truncate(diff),
+        pr_samples=prompt_safety.tagged(
+            "pr_samples",
+            "\n".join(f"- {s}" for s in pr_samples) or "(no prior PRs)",
+        ),
+        commits=prompt_safety.tagged(
+            "commits",
+            "\n".join(f"- {c}" for c in commits) or "(no commits)",
+        ),
+        base_ref=prompt_safety.tagged("base_ref", base_ref),
+        diff=prompt_safety.tagged("diff", _truncate(diff)),
     )
 
     style_sig = "pr:" + "|".join(pr_samples[:3])
@@ -172,7 +182,9 @@ def generate(
             temperature=0.2, max_tokens=1500,
             response_format={"type": "json_object"},
         )
-    except Exception:
+    except Exception as exc:
+        if not _looks_like_response_format_rejection(exc):
+            raise
         response = litellm.completion(
             model=model, messages=messages,
             temperature=0.2, max_tokens=1500,
@@ -204,3 +216,11 @@ def _parse_pr(raw: str) -> PullRequest:
         title=str(data.get("title", "")).strip(),
         body=str(data.get("body", "")).strip(),
     )
+
+
+def _looks_like_response_format_rejection(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    if status not in (400, 422):
+        return False
+    message = str(exc).lower()
+    return "response_format" in message or "json" in message

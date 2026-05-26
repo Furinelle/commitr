@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 import litellm
 
+from commitr import prompt_safety
+
 
 @dataclass
 class CommitGroup:
@@ -38,7 +40,9 @@ Output STRICT JSON only. No prose, no code fences. Schema:
   ]
 }
 
-If the diff is one coherent change, return a single-item groups array."""
+If the diff is one coherent change, return a single-item groups array.
+
+""" + prompt_safety.UNTRUSTED_DATA_INSTRUCTION
 
 
 SPLIT_USER_TEMPLATE = """Recent commit subjects (style scan):
@@ -51,9 +55,7 @@ Staged files:
 {files}
 
 Staged diff:
-```diff
 {diff}
-```
 
 Analyze and return the JSON."""
 
@@ -80,10 +82,19 @@ def analyze_splits(
     caller is expected to fall back to the normal single-commit flow.
     """
     user = SPLIT_USER_TEMPLATE.format(
-        subjects="\n".join(f"- {s}" for s in subjects) or "(none)",
-        samples="\n\n---\n\n".join(samples) or "(none)",
-        files="\n".join(f"- {f}" for f in files),
-        diff=_truncate(diff),
+        subjects=prompt_safety.tagged(
+            "recent_subjects",
+            "\n".join(f"- {s}" for s in subjects) or "(none)",
+        ),
+        samples=prompt_safety.tagged(
+            "commit_samples",
+            "\n\n---\n\n".join(samples) or "(none)",
+        ),
+        files=prompt_safety.tagged(
+            "staged_files",
+            "\n".join(f"- {f}" for f in files),
+        ),
+        diff=prompt_safety.tagged("staged_diff", _truncate(diff)),
     )
     messages = [
         {"role": "system", "content": SPLIT_SYSTEM_PROMPT},
@@ -97,8 +108,11 @@ def analyze_splits(
             max_tokens=2000,
             response_format={"type": "json_object"},
         )
-    except Exception:
-        # Provider may not support response_format — retry without it.
+    except Exception as exc:
+        # Re-raise hard errors (auth, rate-limit, server, network). Only retry
+        # when the provider explicitly rejects response_format.
+        if not _looks_like_response_format_rejection(exc):
+            raise
         response = litellm.completion(
             model=model,
             messages=messages,
@@ -163,3 +177,11 @@ def _parse_json(raw: str) -> dict | None:
         return json.loads(match.group(0))
     except json.JSONDecodeError:
         return None
+
+
+def _looks_like_response_format_rejection(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    if status not in (400, 422):
+        return False
+    message = str(exc).lower()
+    return "response_format" in message or "json" in message

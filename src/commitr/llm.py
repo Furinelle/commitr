@@ -7,6 +7,7 @@ import os
 import litellm
 
 from commitr import cache
+from commitr import prompt_safety
 
 SYSTEM_PROMPT = """You are an expert software engineer writing a git commit message.
 
@@ -25,6 +26,8 @@ CRITICAL — match the project's existing style. From the samples, detect:
 
 If the samples contradict the defaults above, follow the samples.
 
+{untrusted_data_instruction}
+
 Output ONLY the commit message. No explanation, no code fences, no quotes."""
 
 USER_TEMPLATE = """Recent commit subjects (broad style scan):
@@ -34,9 +37,7 @@ A few full commit messages from this repo (use as few-shot style examples):
 {samples}
 {extra_context}
 Staged diff to summarize:
-```diff
 {diff}
-```
 
 Write the commit message now, matching the project's style."""
 
@@ -46,6 +47,11 @@ Additional context about WHY this change is being made (use it to inform the
 body and any issue references, but do not quote it verbatim):
 {context}
 """
+
+
+SYSTEM_PROMPT = SYSTEM_PROMPT.format(
+    untrusted_data_instruction=prompt_safety.UNTRUSTED_DATA_INSTRUCTION
+)
 
 
 def _truncate_diff(diff: str, max_chars: int = 12000) -> str:
@@ -80,17 +86,18 @@ def generate_commit_message(
     samples_block = (
         "\n\n---\n\n".join(samples or []) or "(no prior commits)"
     )
+    safe_context = context.strip() if context and context.strip() else ""
     context_block = (
-        CONTEXT_TEMPLATE.format(context=context.strip())
-        if context and context.strip()
+        CONTEXT_TEMPLATE.format(context=prompt_safety.tagged("issue_context", safe_context))
+        if safe_context
         else ""
     )
 
     user = USER_TEMPLATE.format(
-        subjects=subjects_block,
-        samples=samples_block,
+        subjects=prompt_safety.tagged("recent_subjects", subjects_block),
+        samples=prompt_safety.tagged("commit_samples", samples_block),
         extra_context=context_block,
-        diff=_truncate_diff(diff),
+        diff=prompt_safety.tagged("staged_diff", _truncate_diff(diff)),
     )
 
     # Cache key includes style + context so changing either invalidates.
@@ -139,3 +146,4 @@ def _clean(text: str) -> str:
         lines = [ln for ln in lines if not ln.startswith("```")]
         text = "\n".join(lines).strip()
     return text
+

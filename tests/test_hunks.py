@@ -95,6 +95,54 @@ class SummarizeTests(unittest.TestCase):
         self.assertIn("atomic", out)
 
 
+class AnalyzeHunkSplitsTests(unittest.TestCase):
+    def test_analyze_hunk_splits_redacts_and_wraps_untrusted_hunks(self) -> None:
+        calls: list[dict] = []
+        original_completion = hunks.litellm.completion
+        files = hunks.parse_diff(
+            """diff --git a/a.py b/a.py
+index 1111111..2222222 100644
+--- a/a.py
++++ b/a.py
+@@ -1 +1,2 @@
+ print("x")
++TOKEN = "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+"""
+        )
+
+        class _Message:
+            content = '{"groups":[{"message":"fix: x","hunks":["a.py#0"]}]}'
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            return _Response()
+
+        hunks.litellm.completion = fake_completion
+        try:
+            hunks.analyze_hunk_splits(
+                file_patches=files,
+                subjects=["feat: <subject>"],
+                samples=["fix: <sample>"],
+                model="test/model",
+            )
+        finally:
+            hunks.litellm.completion = original_completion
+
+        sent = calls[0]["messages"][1]["content"]
+        self.assertIn("<hunks>", sent)
+        self.assertIn("</hunks>", sent)
+        self.assertIn("<REDACTED-OPENAI-KEY>", sent)
+        self.assertNotIn("sk-proj-abcdefghijklmnopqrstuvwxyz123456", sent)
+        self.assertIn("&lt;subject&gt;", sent)
+        self.assertIn("untrusted input", hunks.HUNK_SPLIT_SYSTEM_PROMPT)
+
+
 class GroupResponseTests(unittest.TestCase):
     def test_parse_groups_resolves_hunk_ids(self) -> None:
         files = hunks.parse_diff(SAMPLE_DIFF)

@@ -160,7 +160,7 @@ def hook_fill_cmd(msg_file: str = typer.Argument(..., help="Path to COMMIT_EDITM
         return
     try:
         resolved = config.resolve_model(cli_model=None, cli_provider=None)
-        diff = git.staged_diff()
+        diff = git.staged_diff_for_llm()
         subjects = git.recent_commits(limit=20)
         samples = git.recent_commit_samples(limit=5)
         # Auto-detect issue context silently — never block the commit.
@@ -346,7 +346,7 @@ def doctor_cmd() -> None:
         model_error = str(exc)
 
     files = git.staged_files()
-    diff = git.staged_diff() if files else ""
+    diff = git.staged_diff_for_llm() if files else ""
     findings = doctor.analyze_staged_changes(
         diff=diff,
         files=files,
@@ -403,7 +403,8 @@ def _run_commit(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=2) from exc
 
-    diff = git.staged_diff()
+    diff = git.staged_diff_for_llm()
+    patch_diff = git.staged_diff_for_patch() if split else diff
     files = git.staged_files()
     subjects = git.recent_commits(limit=20)
     samples = git.recent_commit_samples(limit=5)
@@ -425,10 +426,13 @@ def _run_commit(
     if split:
         if hunks_split:
             _hunks_split_flow(
-                diff, subjects, samples, resolved, dry_run=dry_run, yes=yes,
+                patch_diff, subjects, samples, resolved, dry_run=dry_run, yes=yes,
             )
         else:
-            _split_flow(diff, subjects, samples, resolved, dry_run=dry_run, yes=yes)
+            _split_flow(
+                diff, patch_diff, subjects, samples, resolved,
+                dry_run=dry_run, yes=yes,
+            )
         return
 
     with console.status(f"[cyan]Asking {resolved}…[/cyan]"):
@@ -495,8 +499,51 @@ def _run_commit(
         raise typer.Exit(code=3) from exc
 
 
+def _stage_files_from_snapshot(
+    files: list[str],
+    snapshot_by_path: dict[str, hunks.FilePatch],
+) -> None:
+    """Stage exactly the originally-staged changes for these files.
+
+    Uses the snapshot diff instead of `git add` so that unstaged edits in the
+    working tree are never accidentally pulled into the index.
+    """
+    patch = _render_snapshot_patch(files, snapshot_by_path)
+    git.unstage_all()
+    if patch:
+        try:
+            git.apply_patch_cached(patch)
+        except (ValueError, RuntimeError):
+            _restore_snapshot(snapshot_by_path)
+            raise
+
+
+def _render_snapshot_patch(
+    files: list[str],
+    snapshot_by_path: dict[str, hunks.FilePatch],
+) -> str:
+    return "".join(
+        rendered
+        for f in files
+        if (fp := snapshot_by_path.get(f)) is not None
+        and (rendered := fp.render())
+    )
+
+
+def _restore_snapshot(snapshot_by_path: dict[str, hunks.FilePatch]) -> None:
+    """Best-effort restore of the original staged snapshot after apply failure."""
+    patch = _render_snapshot_patch(list(snapshot_by_path), snapshot_by_path)
+    git.unstage_all()
+    if patch:
+        try:
+            git.apply_patch_cached(patch)
+        except (ValueError, RuntimeError):
+            pass
+
+
 def _split_flow(
     diff: str,
+    patch_diff: str,
     subjects: list[str],
     samples: list[str],
     resolved: str,
@@ -505,6 +552,9 @@ def _split_flow(
 ) -> None:
     """Multi-commit split: ask LLM to group files, then commit each group."""
     files = git.staged_files()
+    # Snapshot the index NOW so partial staging (git add -p) is preserved.
+    # All subsequent stage/restage operations use this patch, not git-add.
+    snapshot_by_path = {fp.path: fp for fp in hunks.parse_diff(patch_diff)}
     if len(files) <= 1:
         console.print(
             "[yellow]Only one staged file; nothing to split. "
@@ -564,7 +614,7 @@ def _split_flow(
         if choice in (None, "stop"):
             remaining = [f for g in (skipped + list(groups[i - 1 :])) for f in g.files]
             if remaining:
-                git.stage_only(remaining)
+                _stage_files_from_snapshot(remaining, snapshot_by_path)
                 console.print(
                     f"[dim]Re-staged {len(remaining)} files from skipped / remaining groups.[/dim]"
                 )
@@ -584,7 +634,7 @@ def _split_flow(
                 continue
 
         try:
-            git.stage_only(group.files)
+            _stage_files_from_snapshot(group.files, snapshot_by_path)
             git.commit(msg)
             committed += 1
             console.print(f"[green]✓ Committed group {i}.[/green]")
@@ -594,7 +644,7 @@ def _split_flow(
 
     if skipped:
         skipped_files = [f for g in skipped for f in g.files]
-        git.stage_only(skipped_files)
+        _stage_files_from_snapshot(skipped_files, snapshot_by_path)
         console.print(
             f"[yellow]{len(skipped)} group(s) skipped.[/yellow] "
             f"Re-staged {len(skipped_files)} file(s) for follow-up."

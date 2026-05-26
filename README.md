@@ -6,9 +6,11 @@ AI-generated git commit messages that **learn your project's style** — languag
 
 > Stage your changes, run `commitr`, accept / edit / regenerate, commit. That's it.
 
-**Why commitr stands out** — features no other AI commit tool has:
+**Why commitr stands out** — a focused combination for safer, cleaner commits:
 
 - **Hunk-level splitting** (`--split --hunks`) — split *within* a single file, not just by file
+- **Index-safe split flow** — preserves partial staging instead of accidentally committing unstaged hunks
+- **Privacy guard** — redacts common secrets before prompts leave your machine, and treats diffs as untrusted data
 - **Diff cache** — instant on repeat diffs, zero API cost on regenerate
 - **Issue context** (`--issue N`) — model sees the issue title/body so it knows *why*, not just *what*
 - **PR mode** (`commitr pr`) — same style-learning pipeline applied to pull-request descriptions

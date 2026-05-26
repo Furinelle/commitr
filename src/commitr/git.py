@@ -26,8 +26,23 @@ def in_repo() -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
-def staged_diff() -> str:
+def staged_diff_for_llm() -> str:
+    """Staged diff meant for prompt input.
+
+    Keep this human-readable and relatively small. In particular, do not include
+    binary patch payloads; the model only needs to know binary files changed.
+    """
     return _run(["diff", "--staged", "--no-color"])
+
+
+def staged_diff_for_patch() -> str:
+    """Staged diff meant for exact index reconstruction."""
+    return _run(["diff", "--staged", "--no-color", "--binary", "--full-index"])
+
+
+def staged_diff() -> str:
+    """Backward-compatible alias for the prompt-friendly staged diff."""
+    return staged_diff_for_llm()
 
 
 def has_staged_changes() -> bool:

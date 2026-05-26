@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 
 import litellm
 
+from commitr import prompt_safety
+
 
 HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
 DIFF_HEADER_RE = re.compile(r"^diff --git a/(.+) b/(.+)$")
@@ -272,7 +274,9 @@ Output STRICT JSON only. No prose, no code fences. Schema:
   ]
 }
 
-If everything is one coherent change, return a single group with every hunk."""
+If everything is one coherent change, return a single group with every hunk.
+
+""" + prompt_safety.UNTRUSTED_DATA_INSTRUCTION
 
 
 HUNK_SPLIT_USER_TEMPLATE = """Recent commit subjects (style scan):
@@ -302,9 +306,15 @@ def analyze_hunk_splits(
         return []
     hunks_view = summarize_for_llm(file_patches)
     user = HUNK_SPLIT_USER_TEMPLATE.format(
-        subjects="\n".join(f"- {s}" for s in subjects) or "(none)",
-        samples="\n\n---\n\n".join(samples) or "(none)",
-        hunks_view=hunks_view,
+        subjects=prompt_safety.tagged(
+            "recent_subjects",
+            "\n".join(f"- {s}" for s in subjects) or "(none)",
+        ),
+        samples=prompt_safety.tagged(
+            "commit_samples",
+            "\n\n---\n\n".join(samples) or "(none)",
+        ),
+        hunks_view=prompt_safety.tagged("hunks", hunks_view),
     )
     messages = [
         {"role": "system", "content": HUNK_SPLIT_SYSTEM_PROMPT},
@@ -316,7 +326,9 @@ def analyze_hunk_splits(
             temperature=0.1, max_tokens=2500,
             response_format={"type": "json_object"},
         )
-    except Exception:
+    except Exception as exc:
+        if not _looks_like_response_format_rejection(exc):
+            raise
         response = litellm.completion(
             model=model, messages=messages,
             temperature=0.1, max_tokens=2500,
@@ -358,3 +370,11 @@ def render_patch_for_group(group: HunkGroup, file_patches: list[FilePatch]) -> s
             continue
         patches.append(fp.preamble + "".join(h.text for h in chosen))
     return "".join(patches)
+
+
+def _looks_like_response_format_rejection(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    if status not in (400, 422):
+        return False
+    message = str(exc).lower()
+    return "response_format" in message or "json" in message

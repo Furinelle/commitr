@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Secret redaction before every LLM call for common OpenAI keys, AWS access keys, and JWTs.
+- Prompt-injection hardening: commit samples, issue context, diffs, PR inputs, and
+  hunk summaries are wrapped as untrusted XML-style data before model calls.
+
+### Fixed
+- Split flows now distinguish prompt-friendly diffs from full patch diffs, so binary
+  patch payloads are available for index reconstruction without being sent to the LLM.
+- File-level split restaging preserves partial staging instead of staging the entire
+  working-tree file.
+- PR generation now passes commits to the model oldest-to-newest as documented.
+- JSON `response_format` fallback no longer retries generic network/auth/server errors.
+
 ## [0.3.0] — 2026-05-26
 
 ### Added
