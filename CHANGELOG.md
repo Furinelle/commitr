@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-05-26
+
+### Added
+- **Diff cache** at `~/.cache/commitr/` — repeated runs on the same staged diff
+  return instantly without an LLM round-trip. LRU-by-mtime, 7-day TTL, 200-entry cap.
+  Invalidated by changes to model, diff, or style (recent commit subjects).
+- `commitr cache` — inspect entries / disk usage; `commitr cache --clear` to wipe.
+- `--no-cache` flag (and automatic bypass on regenerate) for forced fresh calls.
+- **Issue context injection** — `--issue N` fetches issue title/body/labels via `gh`
+  and feeds it into the prompt so the model knows *why* the change is being made.
+  Auto-detects an issue number from branch names like `feat/123-foo`,
+  `fix-issue-42-crash`, `gh-777`. Pass `--no-issue` to opt out.
+- **`commitr pr` subcommand** — generate a PR title + body from this branch's
+  diff vs base. Auto-detects `origin/main`/`origin/master`. Optional `--create`
+  invokes `gh pr create`. Style-learns from recent merged PR titles.
+- **Hunk-level commit splitting** — `commitr --split --hunks` splits *within* a
+  file, not just file-by-file. Parses the unified diff, asks the LLM to group
+  hunks, and stages each group via `git apply --cached`. Renames / binary diffs
+  / mode changes stay atomic. The roadmap's #1 differentiator vs aicommits /
+  opencommit / aicommit2.
+
+### Changed
+- `llm.generate_commit_message` now accepts `context=` (optional issue/PR context)
+  and `use_cache=` parameters. Backwards-compatible (both keyword-only with defaults).
+- Default model fallback removed: `generate_commit_message` now raises if no
+  model is configured instead of silently using a stale `gpt-4o-mini` default.
+
+### Tests
+- 27 new tests (cache, issue branch detection / formatting, hunks parse / group /
+  render). Total: 46 tests, all green.
+
 ## [0.2.1] — 2026-05-26
 
 ### Changed

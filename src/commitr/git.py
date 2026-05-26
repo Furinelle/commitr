@@ -77,3 +77,33 @@ def stage_only(files: list[str]) -> None:
         raise ValueError("stage_only requires at least one file")
     unstage_all()
     _run(["add", "--", *files])
+
+
+def apply_patch_cached(patch_text: str) -> None:
+    """Apply a unified patch to the index only (no worktree mutation).
+
+    Used by hunk-level splitting: we unstage everything, then re-stage one
+    group's hunks via `git apply --cached`. Raises RuntimeError on failure
+    with git's stderr attached so the caller can recover (e.g. fall back to
+    staging the whole file).
+    """
+    if not patch_text:
+        raise ValueError("apply_patch_cached requires a non-empty patch")
+    result = subprocess.run(
+        ["git", "apply", "--cached", "--whitespace=nowarn", "-"],
+        input=patch_text, capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "git apply --cached failed")
+
+
+def current_branch() -> str | None:
+    """Current branch name, or None on detached HEAD / non-repo."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        return None
+    branch = result.stdout.strip()
+    return branch if branch and branch != "HEAD" else None

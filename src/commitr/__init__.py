@@ -17,7 +17,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from commitr import config, doctor, git, hook, llm, splitter, style
+from commitr import (
+    cache, config, doctor, git, hook, hunks, issue, llm, pr, splitter, style,
+)
 
 
 def _version_callback(value: bool) -> None:
@@ -56,6 +58,22 @@ def _entry(
         False, "--split", "-s",
         help="Analyze the diff and propose splitting into multiple independent commits.",
     ),
+    hunks_flag: bool = typer.Option(
+        False, "--hunks",
+        help="With --split, group at the HUNK level (within files). Requires --split.",
+    ),
+    issue_num: int | None = typer.Option(
+        None, "--issue", "-i",
+        help="Inject issue #N as context for the model. Auto-detected from branch name otherwise.",
+    ),
+    no_issue: bool = typer.Option(
+        False, "--no-issue",
+        help="Skip the auto-detect-from-branch issue context.",
+    ),
+    no_cache: bool = typer.Option(
+        False, "--no-cache",
+        help="Bypass the local message cache (force a fresh LLM call).",
+    ),
     version: bool = typer.Option(
         False, "--version", "-V",
         callback=_version_callback, is_eager=True,
@@ -66,7 +84,11 @@ def _entry(
     config.load_env_file()
     if ctx.invoked_subcommand is not None:
         return
-    _run_commit(model=model, provider=provider, yes=yes, dry_run=dry_run, split=split)
+    _run_commit(
+        model=model, provider=provider, yes=yes, dry_run=dry_run,
+        split=split, hunks_split=hunks_flag,
+        issue_num=issue_num, no_issue=no_issue, no_cache=no_cache,
+    )
 
 
 @app.command("providers")
@@ -141,8 +163,17 @@ def hook_fill_cmd(msg_file: str = typer.Argument(..., help="Path to COMMIT_EDITM
         diff = git.staged_diff()
         subjects = git.recent_commits(limit=20)
         samples = git.recent_commit_samples(limit=5)
+        # Auto-detect issue context silently — never block the commit.
+        issue_ctx: str | None = None
+        try:
+            detected = issue.detect_issue_from_branch()
+            if detected is not None:
+                issue_ctx = issue.fetch_issue_context(detected)
+        except Exception:
+            issue_ctx = None
         message = llm.generate_commit_message(
             diff=diff, subjects=subjects, samples=samples, model=resolved,
+            context=issue_ctx,
         )
     except Exception:
         return  # silent: user gets a clean editor on any failure
@@ -191,6 +222,113 @@ def style_cmd() -> None:
             border_style="cyan",
         )
     )
+
+
+@app.command("cache")
+def cache_cmd(
+    clear: bool = typer.Option(False, "--clear", help="Delete every cached message."),
+) -> None:
+    """Inspect or clear the local commit-message cache."""
+    if clear:
+        removed = cache.clear()
+        console.print(f"[green]✓[/green] Cleared {removed} cache entr{'y' if removed == 1 else 'ies'}.")
+        return
+    info = cache.stats()
+    kb = info["bytes"] / 1024 if info["bytes"] else 0
+    console.print(f"[bold]Cache dir:[/bold] {cache.CACHE_DIR}")
+    console.print(f"Entries:    {info['entries']}")
+    console.print(f"On-disk:    {kb:.1f} KiB")
+    console.print("\n[dim]Use [bold]commitr cache --clear[/bold] to wipe.[/dim]")
+
+
+@app.command("pr")
+def pr_cmd(
+    model: str | None = typer.Option(None, "--model", "-m"),
+    provider: str | None = typer.Option(None, "--provider", "-p"),
+    base: str | None = typer.Option(
+        None, "--base", "-b",
+        help="Base ref to diff against. Auto-detected (origin/main, main, master).",
+    ),
+    create: bool = typer.Option(
+        False, "--create", help="Create the PR via `gh pr create` after generation.",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation, just print/create."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print only; do not call `gh pr create`."),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass the local cache."),
+) -> None:
+    """Generate a pull-request title + body from this branch's diff against base."""
+    config.load_env_file()
+    if not git.in_repo():
+        console.print("[red]Not inside a git repository.[/red]")
+        raise typer.Exit(code=1)
+
+    base_ref = base or pr.detect_base_branch()
+    if not base_ref:
+        console.print(
+            "[red]Could not detect a base branch.[/red] "
+            "Pass --base origin/main (or similar)."
+        )
+        raise typer.Exit(code=1)
+
+    commits = pr.commits_since(base_ref)
+    if not commits:
+        console.print(
+            f"[yellow]No commits on HEAD that aren't already on {base_ref}.[/yellow]"
+        )
+        raise typer.Exit(code=1)
+
+    diff = pr.diff_against(base_ref)
+    if not diff.strip():
+        console.print(
+            f"[yellow]Empty diff against {base_ref}; nothing to describe.[/yellow]"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        resolved = config.resolve_model(cli_model=model, cli_provider=provider)
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    pr_samples = pr.recent_pr_titles()
+
+    with console.status(f"[cyan]Generating PR description via {resolved}…[/cyan]"):
+        try:
+            pull = pr.generate(
+                base_ref=base_ref, commits=commits, diff=diff,
+                pr_samples=pr_samples, model=resolved, use_cache=not no_cache,
+            )
+        except Exception as exc:
+            console.print(f"[red]PR generation failed:[/red] {exc}")
+            raise typer.Exit(code=2) from exc
+
+    console.print(
+        Panel(
+            f"[bold]{pull.title}[/bold]\n\n{pull.body}",
+            title=f"Proposed PR (base: {base_ref}, {len(commits)} commit(s))",
+            border_style="cyan",
+        )
+    )
+
+    if dry_run:
+        return
+
+    if create:
+        if not yes and not questionary.confirm("Create this PR now?").ask():
+            console.print("[dim]Aborted.[/dim]")
+            return
+        import subprocess as _sp
+        result = _sp.run(
+            ["gh", "pr", "create", "--title", pull.title, "--body", pull.body],
+            check=False,
+        )
+        if result.returncode != 0:
+            console.print("[red]`gh pr create` failed (is gh installed and authed?).[/red]")
+            raise typer.Exit(code=2)
+    else:
+        console.print(
+            "\n[dim]Pass [bold]--create[/bold] to open the PR via `gh pr create`.[/dim]"
+        )
 
 
 @app.command("doctor")
@@ -246,6 +384,10 @@ def _run_commit(
     yes: bool,
     dry_run: bool,
     split: bool = False,
+    hunks_split: bool = False,
+    issue_num: int | None = None,
+    no_issue: bool = False,
+    no_cache: bool = False,
 ) -> None:
     if not git.in_repo():
         console.print("[red]Not inside a git repository.[/red]")
@@ -265,6 +407,7 @@ def _run_commit(
     files = git.staged_files()
     subjects = git.recent_commits(limit=20)
     samples = git.recent_commit_samples(limit=5)
+    issue_context = _resolve_issue_context(issue_num, no_issue)
 
     # Doctor preflight: surface deterministic issues before burning an API call.
     findings = doctor.analyze_staged_changes(diff=diff, files=files)
@@ -275,21 +418,34 @@ def _run_commit(
         if doctor.overall_status(findings) == "error":
             raise typer.Exit(code=1)
 
+    if hunks_split and not split:
+        console.print("[yellow]--hunks requires --split. Use `commitr --split --hunks`.[/yellow]")
+        raise typer.Exit(code=1)
+
     if split:
-        _split_flow(diff, subjects, samples, resolved, dry_run=dry_run, yes=yes)
+        if hunks_split:
+            _hunks_split_flow(
+                diff, subjects, samples, resolved, dry_run=dry_run, yes=yes,
+            )
+        else:
+            _split_flow(diff, subjects, samples, resolved, dry_run=dry_run, yes=yes)
         return
 
     with console.status(f"[cyan]Asking {resolved}…[/cyan]"):
         try:
             message = llm.generate_commit_message(
                 diff=diff, subjects=subjects, samples=samples, model=resolved,
+                context=issue_context, use_cache=not no_cache,
             )
         except Exception as exc:
             console.print(f"[red]LLM call failed:[/red] {exc}")
             raise typer.Exit(code=2) from exc
 
     message = _append_coauthor(message)
-    console.print(Panel(message, title=f"Proposed commit (via {resolved})", border_style="cyan"))
+    title_suffix = f"via {resolved}"
+    if issue_context:
+        title_suffix += " · issue context loaded"
+    console.print(Panel(message, title=f"Proposed commit ({title_suffix})", border_style="cyan"))
 
     if dry_run:
         return
@@ -313,8 +469,10 @@ def _run_commit(
 
     if choice == "regen":
         with console.status("[cyan]Regenerating…[/cyan]"):
+            # Regen always bypasses cache; the user explicitly wants a new draft.
             message = llm.generate_commit_message(
                 diff=diff, subjects=subjects, samples=samples, model=resolved,
+                context=issue_context, use_cache=False,
             )
         message = _append_coauthor(message)
         console.print(Panel(message, title="Proposed commit (v2)", border_style="cyan"))
@@ -442,6 +600,194 @@ def _split_flow(
             f"Re-staged {len(skipped_files)} file(s) for follow-up."
         )
     console.print(f"\n[bold green]Done.[/bold green] {committed} commit(s) created.")
+
+
+def _hunks_split_flow(
+    diff: str,
+    subjects: list[str],
+    samples: list[str],
+    resolved: str,
+    dry_run: bool,
+    yes: bool = False,
+) -> None:
+    """Hunk-level split: ask LLM to group hunks, then `git apply --cached` each group."""
+    file_patches = hunks.parse_diff(diff)
+    if not file_patches:
+        console.print("[yellow]No parseable hunks in the staged diff.[/yellow]")
+        raise typer.Exit(code=1)
+
+    total_hunks = sum(len(fp.hunks) for fp in file_patches if not fp.atomic)
+    atomic_count = sum(1 for fp in file_patches if fp.atomic)
+    if total_hunks <= 1 and atomic_count == 0:
+        console.print(
+            "[yellow]Only one hunk to split; run without --hunks for a normal commit.[/yellow]"
+        )
+        raise typer.Exit(code=1)
+
+    with console.status(
+        f"[cyan]Analyzing {total_hunks} hunk(s) across "
+        f"{len(file_patches)} file(s)…[/cyan]"
+    ):
+        try:
+            groups = hunks.analyze_hunk_splits(
+                file_patches=file_patches,
+                subjects=subjects, samples=samples, model=resolved,
+            )
+        except Exception as exc:
+            console.print(f"[red]Hunk split analysis failed:[/red] {exc}")
+            raise typer.Exit(code=2) from exc
+
+    if len(groups) == 1:
+        console.print(
+            "[dim]Model judged this as a single coherent change — no hunk split needed.[/dim]"
+        )
+
+    # Apply Co-Authored-By trailer (if configured) to every group's proposed message.
+    for g in groups:
+        g.message = _append_coauthor(g.message)
+
+    console.print(
+        f"\n[bold cyan]Proposed {len(groups)} commit group(s) (hunk-level).[/bold cyan]\n"
+    )
+
+    # Snapshot the original index so we can restore on Stop / failure.
+    if dry_run:
+        for i, group in enumerate(groups, 1):
+            _print_hunk_group_panel(group, file_patches, i, len(groups))
+        console.print("[dim](dry-run — no commits made)[/dim]")
+        return
+
+    skipped: list[hunks.HunkGroup] = []
+    committed = 0
+    remaining_groups = list(groups)
+    for i, group in enumerate(groups, 1):
+        _print_hunk_group_panel(group, file_patches, i, len(groups))
+
+        if yes:
+            if not group.message.strip():
+                console.print(
+                    "[yellow]Group has no message; skipping (--yes can't edit).[/yellow]"
+                )
+                skipped.append(group)
+                continue
+            choice = "commit"
+        else:
+            choice = questionary.select(
+                "What now?",
+                choices=[
+                    questionary.Choice("Commit this group", value="commit"),
+                    questionary.Choice("Edit message, then commit", value="edit"),
+                    questionary.Choice("Skip this group", value="skip"),
+                    questionary.Choice("Stop (abort remaining)", value="stop"),
+                ],
+            ).ask()
+
+        if choice in (None, "stop"):
+            # Re-stage everything that hasn't been committed so the user can finish.
+            _restage_remaining_hunks(skipped + remaining_groups[i - 1 :], file_patches)
+            console.print("[dim]Stopped.[/dim]")
+            return
+
+        if choice == "skip":
+            skipped.append(group)
+            continue
+
+        msg = group.message
+        if choice == "edit" or not msg.strip():
+            msg = _edit_in_editor(msg or "")
+            if not msg.strip():
+                console.print("[dim]Empty message; skipping this group.[/dim]")
+                skipped.append(group)
+                continue
+
+        try:
+            patch_text = hunks.render_patch_for_group(group, file_patches)
+            git.unstage_all()
+            git.apply_patch_cached(patch_text)
+            git.commit(msg)
+            committed += 1
+            console.print(f"[green]✓ Committed group {i}.[/green]")
+        except (ValueError, RuntimeError) as exc:
+            console.print(f"[red]Commit failed:[/red] {exc}")
+            # Restore the remaining hunks so the user isn't left with a broken index.
+            _restage_remaining_hunks(skipped + remaining_groups[i - 1 :], file_patches)
+            return
+
+    if skipped:
+        _restage_remaining_hunks(skipped, file_patches)
+        console.print(
+            f"[yellow]{len(skipped)} group(s) skipped.[/yellow] Re-staged their hunks."
+        )
+    console.print(f"\n[bold green]Done.[/bold green] {committed} commit(s) created.")
+
+
+def _restage_remaining_hunks(
+    groups: list[hunks.HunkGroup],
+    file_patches: list[hunks.FilePatch],
+) -> None:
+    """Reset the index and re-apply hunks from the given groups."""
+    if not groups:
+        return
+    git.unstage_all()
+    for group in groups:
+        try:
+            patch = hunks.render_patch_for_group(group, file_patches)
+            if patch:
+                git.apply_patch_cached(patch)
+        except (ValueError, RuntimeError):
+            # Best-effort: skip un-applicable patches but keep going.
+            continue
+
+
+def _print_hunk_group_panel(
+    group: hunks.HunkGroup,
+    file_patches: list[hunks.FilePatch],
+    i: int,
+    total: int,
+) -> None:
+    msg = group.message or "[dim italic](no message — you'll need to edit)[/dim italic]"
+    by_file: dict[str, list[int]] = {}
+    for ref in group.refs:
+        by_file.setdefault(ref.path, []).append(ref.index)
+    files_block = "\n".join(
+        f"  {path}: {len(idxs)} hunk(s)" for path, idxs in by_file.items()
+    )
+    title = f"Group {i}/{total} · {len(group.refs)} hunk(s)"
+    if group.rationale:
+        title += f" · {group.rationale}"
+    console.print(
+        Panel(f"{msg}\n\n[dim]Hunks:[/dim]\n{files_block}", title=title, border_style="cyan")
+    )
+
+
+def _resolve_issue_context(issue_num: int | None, no_issue: bool) -> str | None:
+    """Resolve --issue / auto-detect / --no-issue into a prompt-ready context block.
+
+    Order:
+      1. If --no-issue, return None.
+      2. If --issue N was passed, fetch N (warn if gh fails).
+      3. Otherwise, try detecting N from the current branch (silent on miss).
+    """
+    if no_issue:
+        return None
+    if issue_num is not None:
+        ctx = issue.fetch_issue_context(issue_num)
+        if not ctx:
+            console.print(
+                f"[yellow]Could not fetch issue #{issue_num} "
+                "(is `gh` installed and authenticated?).[/yellow]"
+            )
+        return ctx
+    detected = issue.detect_issue_from_branch()
+    if detected is None:
+        return None
+    ctx = issue.fetch_issue_context(detected)
+    if ctx:
+        console.print(
+            f"[dim]Loaded context from auto-detected issue #{detected} "
+            "(use --no-issue to skip).[/dim]"
+        )
+    return ctx
 
 
 def _append_coauthor(message: str) -> str:

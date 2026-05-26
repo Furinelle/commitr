@@ -1,9 +1,12 @@
 """LLM call: turn a staged diff into a commit message."""
 from __future__ import annotations
 
+import hashlib
 import os
 
 import litellm
+
+from commitr import cache
 
 SYSTEM_PROMPT = """You are an expert software engineer writing a git commit message.
 
@@ -29,13 +32,20 @@ USER_TEMPLATE = """Recent commit subjects (broad style scan):
 
 A few full commit messages from this repo (use as few-shot style examples):
 {samples}
-
+{extra_context}
 Staged diff to summarize:
 ```diff
 {diff}
 ```
 
 Write the commit message now, matching the project's style."""
+
+
+CONTEXT_TEMPLATE = """
+Additional context about WHY this change is being made (use it to inform the
+body and any issue references, but do not quote it verbatim):
+{context}
+"""
 
 
 def _truncate_diff(diff: str, max_chars: int = 12000) -> str:
@@ -54,20 +64,41 @@ def generate_commit_message(
     subjects: list[str] | None = None,
     samples: list[str] | None = None,
     model: str | None = None,
+    *,
+    context: str | None = None,
+    use_cache: bool = True,
 ) -> str:
-    model = model or os.environ.get("COMMITR_MODEL", "gpt-4o-mini")
+    model = model or os.environ.get("COMMITR_MODEL")
+    if not model:
+        raise RuntimeError(
+            "No model configured. Set COMMITR_MODEL or pass model=... "
+            "(e.g. `commitr --provider deepseek`)."
+        )
     subjects_block = (
         "\n".join(f"- {s}" for s in (subjects or [])) or "(no prior commits)"
     )
     samples_block = (
         "\n\n---\n\n".join(samples or []) or "(no prior commits)"
     )
+    context_block = (
+        CONTEXT_TEMPLATE.format(context=context.strip())
+        if context and context.strip()
+        else ""
+    )
 
     user = USER_TEMPLATE.format(
         subjects=subjects_block,
         samples=samples_block,
+        extra_context=context_block,
         diff=_truncate_diff(diff),
     )
+
+    # Cache key includes style + context so changing either invalidates.
+    style_sig = _style_signature(subjects or [], samples or [], context or "")
+    if use_cache:
+        hit = cache.lookup(diff=diff, model=model, style_signature=style_sig)
+        if hit and hit.message:
+            return hit.message
 
     response = litellm.completion(
         model=model,
@@ -79,7 +110,26 @@ def generate_commit_message(
         max_tokens=1000,
     )
     content = response.choices[0].message.content or ""
-    return _clean(content)
+    message = _clean(content)
+
+    if use_cache and message:
+        cache.store(diff=diff, model=model, message=message, style_signature=style_sig)
+    return message
+
+
+def _style_signature(subjects: list[str], samples: list[str], context: str) -> str:
+    """Compact hash of style-influencing inputs for cache keying."""
+    h = hashlib.sha256()
+    for s in subjects[:5]:  # only top of history matters for style
+        h.update(s.encode("utf-8"))
+        h.update(b"\x00")
+    h.update(b"\x01")
+    for s in samples[:2]:
+        h.update(s.encode("utf-8"))
+        h.update(b"\x00")
+    h.update(b"\x02")
+    h.update(context.encode("utf-8"))
+    return h.hexdigest()[:16]
 
 
 def _clean(text: str) -> str:

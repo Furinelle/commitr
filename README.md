@@ -125,8 +125,12 @@ commitr config        # show the resolved model + config file locations
 commitr                                # interactive (default)
 commitr --yes                          # commit without asking (CI-friendly)
 commitr --dry-run                      # print the message; don't commit
-commitr --split                        # analyze diff; propose multi-commit split
+commitr --split                        # file-level multi-commit split
+commitr --split --hunks                # HUNK-level split (within files) — v0.3+
 commitr --split --yes                  # non-interactive split (commits every group)
+commitr --issue 42                     # inject issue #42 as context (via `gh`)
+commitr --no-issue                     # skip auto-detect-from-branch issue context
+commitr --no-cache                     # force a fresh LLM call
 commitr --version                      # print version and exit
 commitr --provider deepseek            # use a preset, just for this run
 commitr --model deepseek/deepseek-reasoner   # exact model override
@@ -134,6 +138,9 @@ commitr providers                      # subcommand: list providers
 commitr config --init                  # subcommand: write template config
 commitr style                          # inspect learned commit style
 commitr doctor                         # check staged changes before generation
+commitr cache                          # inspect message cache; --clear to wipe
+commitr pr                             # generate a PR title + body
+commitr pr --create                    # ...and open it via `gh pr create`
 commitr install-hook                   # install prepare-commit-msg git hook
 commitr uninstall-hook                 # remove the git hook
 ```
@@ -228,6 +235,62 @@ commitr doctor
 - very large diffs that may lose details
 - lockfile-only commits that may be missing the dependency change
 
+## Issue context (`--issue`)
+
+`commitr` knows that *why* matters more than *what*. Point it at an issue and
+the model sees the issue's title, body, labels, and state when drafting:
+
+```bash
+commitr --issue 42                     # explicit
+commitr                                 # auto-detected from branch `feat/42-foo`
+commitr --no-issue                      # skip auto-detect
+```
+
+Auto-detect matches common patterns: `feat/123-name`, `fix-issue-42-crash`,
+`gh-777`, `issue/9000`. Uses `gh` under the hood, so you need it installed and
+authenticated — but it fails silently if not available (your commit isn't blocked).
+
+## Diff cache
+
+Identical diffs produce identical messages. Cache hits return instantly with
+no API call — useful for regen, doctor, and frequent staging churn:
+
+```bash
+commitr cache                          # show entries + disk usage
+commitr cache --clear                  # wipe everything
+commitr --no-cache                     # one-off bypass
+```
+
+Cache lives at `~/.cache/commitr/` (or `$XDG_CACHE_HOME/commitr/`). LRU-by-mtime,
+7-day TTL, 200-entry cap. Invalidated by changes in model, diff, or repo style.
+
+## PR description mode (`commitr pr`)
+
+Same style-learning pipeline, but for pull requests — learns from your repo's
+recent merged PR titles and your branch's commits + diff:
+
+```bash
+commitr pr                             # print proposal
+commitr pr --create                    # generate + `gh pr create` in one go
+commitr pr --base origin/develop       # different base
+```
+
+## Hunk-level splitting (`--split --hunks`)
+
+The roadmap headliner. `commitr --split` already groups *files* into independent
+commits. With `--hunks` it goes one level deeper — splitting *within* a file:
+
+```bash
+git add big-refactor.py                 # staged 3 unrelated hunks in one file
+commitr --split --hunks
+# → group 1: hunks #0 + #2 (the feature)
+# → group 2: hunk #1 (the unrelated bugfix)
+# Each group is staged via `git apply --cached` and committed separately.
+```
+
+Renames, binary diffs, and mode changes stay atomic. If the model can't parse
+or returns garbage, the remaining hunks are re-staged so you can finish manually.
+
 ## Roadmap
 
 - [x] MVP: read staged diff → LLM → interactive accept/edit/regen → commit
@@ -237,24 +300,33 @@ commitr doctor
 - [x] `prepare-commit-msg` git-hook mode (`commitr install-hook`)
 - [x] Optional `Co-Authored-By` trailer (per-repo opt-in)
 - [x] Local `style` and `doctor` inspection commands
-- [ ] Hunk-level commit splitting (within a file)
-- [ ] Semantic diff noise filtering
+- [x] Hunk-level commit splitting (within a file) — v0.3
+- [x] Diff caching (don't re-call the LLM for identical diffs) — v0.3
+- [x] Issue context injection (`--issue N` + branch auto-detect) — v0.3
+- [x] PR description mode (`commitr pr`) — v0.3
+- [ ] Semantic diff noise filtering (drop import re-orders, whitespace, etc.)
 - [ ] Team policy file (`.commitr.toml`)
-- [ ] Diff caching (don't re-call the LLM for identical diffs)
-- [ ] Binary diff detection & skip
-- [ ] Homebrew tap & PyPI release
+- [ ] Monorepo per-package style profiles
+- [ ] Multi-provider race mode (`--race openai,anthropic,deepseek`)
+- [ ] `commitr lint` — score recent commits, suggest rewrites
+- [ ] Raycast extension for one-click commits on macOS
+- [ ] Homebrew tap
 
 ## Project layout
 
 ```
 src/commitr/
 ├── __init__.py   # Typer CLI: callback + subcommands
+├── cache.py      # on-disk message cache (LRU + TTL)
 ├── config.py     # provider presets, config & .env loading, model resolution
 ├── doctor.py     # local staged-diff health checks
 ├── git.py        # subprocess wrappers around git
 ├── hook.py       # prepare-commit-msg install / uninstall / fill
-├── llm.py        # LiteLLM call + style-aware prompt
-├── splitter.py   # LLM-driven multi-commit grouping (`--split`)
+├── hunks.py      # hunk-level diff parsing + grouping (`--split --hunks`)
+├── issue.py      # branch → issue # auto-detect + `gh` context fetch
+├── llm.py        # LiteLLM call + style-aware prompt + cache
+├── pr.py         # PR title + body generation (`commitr pr`)
+├── splitter.py   # LLM-driven file-level multi-commit grouping (`--split`)
 └── style.py      # commit history style inference
 ```
 
