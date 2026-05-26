@@ -44,3 +44,52 @@ jobs:
 
       - name: Publish to PyPI (trusted publishing — no token needed)
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # required to create a release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so CHANGELOG.md parsing works
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Pull the section for this version: from "## [X.Y.Z]" to the next "## ["
+          awk -v ver="$version" '
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "[" ver "]")) { found = 1; next }
+            }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "Release $GITHUB_REF_NAME" > release-notes.md
+          fi
+          {
+            echo ""
+            echo "**Install:** \`pip install commitr==$version\`"
+            echo ""
+            echo "[PyPI](https://pypi.org/project/commitr/$version/) · [Changelog](https://github.com/${{ github.repository }}/blob/master/CHANGELOG.md)"
+          } >> release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: dist/*
+          make_latest: true
+          fail_on_unmatched_files: true
