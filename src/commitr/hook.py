@@ -13,8 +13,8 @@ case "${2:-}" in
   message|template|merge|squash|commit)
     exit 0 ;;
 esac
-if command -v commitr >/dev/null 2>&1; then
-  commitr hook-fill "$1" >/dev/null 2>&1 || true
+if command -v commitr >/dev/null; then
+  commitr hook-fill "$1" >/dev/null || true  # Preserve stderr for redaction/security feedback.
 fi
 """
 

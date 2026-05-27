@@ -8,6 +8,13 @@ from commitr import hook
 
 
 class HookTests(unittest.TestCase):
+    def test_hook_script_preserves_stderr(self) -> None:
+        """The installed hook script must NOT redirect stderr; users need to
+        see redaction findings and security feedback."""
+        self.assertIn(">/dev/null", hook.HOOK_SCRIPT)
+        self.assertNotIn("2>&1", hook.HOOK_SCRIPT)
+        self.assertNotIn("2>/dev/null", hook.HOOK_SCRIPT)
+
     def test_fill_message_file_prepends_generated_message_to_empty_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             msg_file = Path(tmp) / "COMMIT_EDITMSG"

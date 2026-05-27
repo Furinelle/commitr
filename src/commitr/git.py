@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+import warnings
 
 
 def _run(args: list[str]) -> str:
@@ -42,6 +43,12 @@ def staged_diff_for_patch() -> str:
 
 def staged_diff() -> str:
     """Backward-compatible alias for the prompt-friendly staged diff."""
+    warnings.warn(
+        "staged_diff() is deprecated and will be removed in a future release. "
+        "Use staged_diff_for_llm() or staged_diff_for_patch() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return staged_diff_for_llm()
 
 

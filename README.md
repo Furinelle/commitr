@@ -177,6 +177,8 @@ git commit              # editor opens with AI-generated message already there
 - Silently falls back to an empty editor if the LLM call fails (your commit isn't blocked)
 - Remove it any time: `commitr uninstall-hook`
 
+> Note: if you upgraded from v0.3.1 or earlier, run `commitr install-hook --force` to pick up the new hook script — older installs suppress stderr, hiding the new redaction feedback.
+
 ## Smart commit splitting (`--split`)
 
 When you staged a feature **and** an unrelated bugfix **and** some docs in one

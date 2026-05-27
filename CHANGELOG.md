@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2026-05-27
+
+### Added
+- Redaction feedback now prints from every LLM call site — single commit, regenerate,
+  `--split`, `--split --hunks`, `commitr pr`, and the prepare-commit-msg hook.
+- AWS access-key redaction expanded from 2 to 12 official IAM identifier prefixes
+  (`AKIA`, `ASIA`, `AGPA`, `AIDA`, `AIPA`, `AROA`, `ANPA`, `ANVA`, `APKA`, `ABIA`,
+  `ACCA`, `ASCA`).
+- Private-key redaction now consumes the entire PEM block (`-----BEGIN ... END-----`),
+  not just the header line; header-only fallback kept for truncated diffs.
+
+### Changed
+- `prompt_safety` pending-findings buffer migrated to `ContextVar` for thread / asyncio
+  isolation. Synchronous CLI behavior is unchanged.
+- The installed `prepare-commit-msg` hook now preserves stderr so users can see
+  redaction findings and other security feedback during hook-mode commits.
+  **Upgraders:** run `commitr install-hook --force` to pick up the new script.
+
+### Fixed
+- Removed the duplicate prompt-build pass (`_preview_prompt_redactions`); redaction
+  counts come from the real LLM call via a context-manager wrapper, so token usage
+  and findings can never diverge.
+- LLM exceptions no longer hide redaction findings — accumulated findings are still
+  printed before the original exception propagates.
+
 ## [0.3.1] — 2026-05-27
 
 ### Added

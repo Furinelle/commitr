@@ -1,6 +1,7 @@
 """commitr: AI-generated git commit messages that match your project's style."""
 from __future__ import annotations
 
+import contextlib
 import importlib.metadata
 import logging
 import os
@@ -18,7 +19,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from commitr import (
-    cache, config, doctor, git, hook, hunks, issue, llm, pr, splitter, style,
+    cache, config, doctor, git, hook, hunks, issue, llm, pr, prompt_safety,
+    splitter, style,
 )
 
 
@@ -39,6 +41,7 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 console = Console()
+stderr_console = Console(stderr=True)
 
 
 @app.callback(invoke_without_command=True)
@@ -171,10 +174,11 @@ def hook_fill_cmd(msg_file: str = typer.Argument(..., help="Path to COMMIT_EDITM
                 issue_ctx = issue.fetch_issue_context(detected)
         except Exception:
             issue_ctx = None
-        message = llm.generate_commit_message(
-            diff=diff, subjects=subjects, samples=samples, model=resolved,
-            context=issue_ctx,
-        )
+        with _report_redactions():
+            message = llm.generate_commit_message(
+                diff=diff, subjects=subjects, samples=samples, model=resolved,
+                context=issue_ctx,
+            )
     except Exception:
         return  # silent: user gets a clean editor on any failure
     message = _append_coauthor(message)
@@ -293,14 +297,15 @@ def pr_cmd(
     pr_samples = pr.recent_pr_titles()
 
     with console.status(f"[cyan]Generating PR description via {resolved}…[/cyan]"):
-        try:
-            pull = pr.generate(
-                base_ref=base_ref, commits=commits, diff=diff,
-                pr_samples=pr_samples, model=resolved, use_cache=not no_cache,
-            )
-        except Exception as exc:
-            console.print(f"[red]PR generation failed:[/red] {exc}")
-            raise typer.Exit(code=2) from exc
+        with _report_redactions():
+            try:
+                pull = pr.generate(
+                    base_ref=base_ref, commits=commits, diff=diff,
+                    pr_samples=pr_samples, model=resolved, use_cache=not no_cache,
+                )
+            except Exception as exc:
+                console.print(f"[red]PR generation failed:[/red] {exc}")
+                raise typer.Exit(code=2) from exc
 
     console.print(
         Panel(
@@ -436,14 +441,15 @@ def _run_commit(
         return
 
     with console.status(f"[cyan]Asking {resolved}…[/cyan]"):
-        try:
-            message = llm.generate_commit_message(
-                diff=diff, subjects=subjects, samples=samples, model=resolved,
-                context=issue_context, use_cache=not no_cache,
-            )
-        except Exception as exc:
-            console.print(f"[red]LLM call failed:[/red] {exc}")
-            raise typer.Exit(code=2) from exc
+        with _report_redactions():
+            try:
+                message = llm.generate_commit_message(
+                    diff=diff, subjects=subjects, samples=samples, model=resolved,
+                    context=issue_context, use_cache=not no_cache,
+                )
+            except Exception as exc:
+                console.print(f"[red]LLM call failed:[/red] {exc}")
+                raise typer.Exit(code=2) from exc
 
     message = _append_coauthor(message)
     title_suffix = f"via {resolved}"
@@ -473,11 +479,12 @@ def _run_commit(
 
     if choice == "regen":
         with console.status("[cyan]Regenerating…[/cyan]"):
-            # Regen always bypasses cache; the user explicitly wants a new draft.
-            message = llm.generate_commit_message(
-                diff=diff, subjects=subjects, samples=samples, model=resolved,
-                context=issue_context, use_cache=False,
-            )
+            with _report_redactions():
+                # Regen always bypasses cache; the user explicitly wants a new draft.
+                message = llm.generate_commit_message(
+                    diff=diff, subjects=subjects, samples=samples, model=resolved,
+                    context=issue_context, use_cache=False,
+                )
         message = _append_coauthor(message)
         console.print(Panel(message, title="Proposed commit (v2)", border_style="cyan"))
         if not questionary.confirm("Commit this?").ask():
@@ -497,6 +504,37 @@ def _run_commit(
     except RuntimeError as exc:
         console.print(f"[red]Commit failed:[/red] {exc}")
         raise typer.Exit(code=3) from exc
+
+
+@contextlib.contextmanager
+def _report_redactions():
+    """Clear stale findings, then print whatever the wrapped LLM call accumulated.
+
+    The `finally` block is load-bearing: even when the LLM call raises, the
+    user must see secrets that were redacted before the failure. The print
+    itself is guarded so a stderr failure never masks the original exception.
+    """
+    prompt_safety.collect_and_clear_findings()
+    try:
+        yield
+    finally:
+        try:
+            _print_redaction_findings(prompt_safety.collect_and_clear_findings())
+        except Exception:
+            pass
+
+
+def _print_redaction_findings(findings: list[tuple[str, int]]) -> None:
+    if not findings:
+        return
+    counts: dict[str, int] = {}
+    for kind, count in findings:
+        counts[kind] = counts.get(kind, 0) + count
+    total = sum(counts.values())
+    summary = ", ".join(f"{count} {kind}" for kind, count in counts.items())
+    stderr_console.print(
+        f"[dim]Redacted {total} secret(s) before sending: {summary}.[/dim]"
+    )
 
 
 def _stage_files_from_snapshot(
@@ -563,13 +601,14 @@ def _split_flow(
         raise typer.Exit(code=1)
 
     with console.status(f"[cyan]Analyzing {len(files)} files for split groups…[/cyan]"):
-        try:
-            groups = splitter.analyze_splits(
-                diff=diff, files=files, subjects=subjects, samples=samples, model=resolved,
-            )
-        except Exception as exc:
-            console.print(f"[red]Split analysis failed:[/red] {exc}")
-            raise typer.Exit(code=2) from exc
+        with _report_redactions():
+            try:
+                groups = splitter.analyze_splits(
+                    diff=diff, files=files, subjects=subjects, samples=samples, model=resolved,
+                )
+            except Exception as exc:
+                console.print(f"[red]Split analysis failed:[/red] {exc}")
+                raise typer.Exit(code=2) from exc
 
     # Apply Co-Authored-By trailer (if configured) to every group's proposed message.
     for g in groups:
@@ -678,14 +717,15 @@ def _hunks_split_flow(
         f"[cyan]Analyzing {total_hunks} hunk(s) across "
         f"{len(file_patches)} file(s)…[/cyan]"
     ):
-        try:
-            groups = hunks.analyze_hunk_splits(
-                file_patches=file_patches,
-                subjects=subjects, samples=samples, model=resolved,
-            )
-        except Exception as exc:
-            console.print(f"[red]Hunk split analysis failed:[/red] {exc}")
-            raise typer.Exit(code=2) from exc
+        with _report_redactions():
+            try:
+                groups = hunks.analyze_hunk_splits(
+                    file_patches=file_patches,
+                    subjects=subjects, samples=samples, model=resolved,
+                )
+            except Exception as exc:
+                console.print(f"[red]Hunk split analysis failed:[/red] {exc}")
+                raise typer.Exit(code=2) from exc
 
     if len(groups) == 1:
         console.print(
